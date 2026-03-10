@@ -7,6 +7,7 @@ import { Label } from '@/components/ui/label';
 import { toast } from 'sonner';
 import { Mail, Lock, User, Eye, EyeOff } from 'lucide-react';
 import { motion } from 'framer-motion';
+import { Link } from 'react-router-dom';
 
 const Auth = () => {
   const [mode, setMode] = useState<'login' | 'signup' | 'forgot'>('login');
@@ -207,6 +208,12 @@ const Auth = () => {
             ) : (
               <>Already have an account? <button onClick={() => setMode('login')} className="text-accent hover:underline">Sign in</button></>
             )}
+          </p>
+          <p className="text-2xs text-center text-muted-foreground mt-2">
+            Are you a property owner?{' '}
+            <Link to="/owner-auth" className="text-accent hover:underline">
+              Sign in here &rarr;
+            </Link>
           </p>
         </motion.div>
       </div>

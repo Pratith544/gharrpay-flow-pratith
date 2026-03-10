@@ -27,6 +27,7 @@ import LandingPage from "./pages/LandingPage";
 import Auth from "./pages/Auth";
 import ResetPassword from "./pages/ResetPassword";
 import OwnerPortal from "./pages/OwnerPortal";
+import OwnerAuth from "./pages/OwnerAuth";
 import NotFound from "./pages/NotFound";
 
 const queryClient = new QueryClient();
@@ -48,6 +49,7 @@ const App = () => (
             <Route path="/reset-password" element={<ResetPassword />} />
 
             {/* Owner-facing portal */}
+            <Route path="/owner-auth" element={<OwnerAuth />} />
             <Route path="/owner-portal" element={<OwnerPortal />} />
 
             {/* Internal CRM routes */}

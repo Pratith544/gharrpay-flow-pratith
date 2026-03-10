@@ -137,10 +137,10 @@ export default function OwnerPortal() {
   const [confirmStatus, setConfirmStatus] = useState('vacant');
   const [confirmNotes, setConfirmNotes] = useState('');
 
-  // If not logged in, redirect to auth
+  // If not logged in, redirect to owner auth
   useEffect(() => {
     if (!authLoading && !user) {
-      navigate('/auth?redirect=/owner-portal');
+      navigate('/owner-auth?redirect=/owner-portal');
     }
   }, [authLoading, user, navigate]);
 
