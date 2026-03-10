@@ -14,6 +14,7 @@ import { toast } from 'sonner';
 import { motion } from 'framer-motion';
 import PropertyChat from '@/components/PropertyChat';
 import NearbyLandmarks from '@/components/NearbyLandmarks';
+import { supabase } from '@/integrations/supabase/client';
 
 const AMENITY_ICONS: Record<string, any> = {
   WiFi: Wifi, Food: Coffee, Laundry: Shirt, Security: ShieldCheck, Cleaning: Sparkles,
@@ -33,6 +34,8 @@ export default function PropertyDetail() {
   const [selectedRoom, setSelectedRoom] = useState<any>(null);
   const [selectedBed, setSelectedBed] = useState<any>(null);
   const [customerForm, setCustomerForm] = useState({ name: '', phone: '', email: '', moveInDate: '' });
+  const [visitForm, setVisitForm] = useState({ name: '', phone: '', date: '', time: '' });
+  const [visitSubmitting, setVisitSubmitting] = useState(false);
   const [reservationResult, setReservationResult] = useState<any>(null);
   const [heroIdx, setHeroIdx] = useState(0);
 
@@ -104,6 +107,86 @@ export default function PropertyDetail() {
       setReservationResult(null);
     } catch (e: any) {
       toast.error(e.message);
+    }
+  };
+
+  const toIsoFromDateTime = (date: string, timeLabel: string) => {
+    if (!date || !timeLabel) return null;
+    const m = timeLabel.trim().match(/^(\d{1,2}):(\d{2})\s*(AM|PM)$/i);
+    if (!m) return null;
+    let hour = parseInt(m[1], 10);
+    const minute = parseInt(m[2], 10);
+    const ampm = m[3].toUpperCase();
+    if (ampm === 'PM' && hour !== 12) hour += 12;
+    if (ampm === 'AM' && hour === 12) hour = 0;
+    const d = new Date(`${date}T00:00:00`);
+    if (Number.isNaN(d.getTime())) return null;
+    d.setHours(hour, minute, 0, 0);
+    return d.toISOString();
+  };
+
+  const handleScheduleVisit = async () => {
+    if (!property?.id) return;
+    if (!visitForm.name.trim() || !visitForm.phone.trim() || !visitForm.date || !visitForm.time) {
+      toast.error('Please enter your name, phone, date, and time.');
+      return;
+    }
+    const scheduledAt = toIsoFromDateTime(visitForm.date, visitForm.time);
+    if (!scheduledAt) {
+      toast.error('Please select a valid date and time.');
+      return;
+    }
+
+    setVisitSubmitting(true);
+    try {
+      const now = new Date().toISOString();
+
+      const { data: lead, error: leadError } = await supabase
+        .from('leads')
+        .insert({
+          name: visitForm.name.trim(),
+          phone: visitForm.phone.trim(),
+          property_id: property.id,
+          source: 'website',
+          status: 'visit_scheduled',
+          last_activity_at: now,
+        })
+        .select()
+        .single();
+      if (leadError) throw leadError;
+
+      const { error: visitError } = await supabase.from('visits').insert({
+        lead_id: lead.id,
+        property_id: property.id,
+        scheduled_at: scheduledAt,
+        confirmed: false,
+        outcome: null,
+        created_at: now,
+        updated_at: now,
+      });
+      if (visitError) throw visitError;
+
+      await supabase
+        .from('activity_log')
+        .insert({
+          lead_id: lead.id,
+          action: 'visit_scheduled',
+          created_at: now,
+          metadata: {
+            description: `Visit scheduled at ${property.name} on ${scheduledAt}`,
+            property_id: property.id,
+            property_name: property.name,
+            scheduled_at: scheduledAt,
+          },
+        });
+
+      toast.success("Visit request submitted! We'll confirm shortly.");
+      setVisitForm({ name: '', phone: '', date: '', time: '' });
+      setActionMode(null);
+    } catch (e: any) {
+      toast.error(e?.message || 'Failed to schedule visit');
+    } finally {
+      setVisitSubmitting(false);
     }
   };
 
@@ -384,7 +467,7 @@ export default function PropertyDetail() {
       </div>
 
       {/* Chat Widget */}
-      <PropertyChat propertyName={property.name} isOpen={chatOpen} onClose={() => setChatOpen(false)} />
+      <PropertyChat propertyId={property.id} propertyName={property.name} isOpen={chatOpen} onClose={() => setChatOpen(false)} />
 
       {/* Pre-Book Dialog */}
       <Dialog open={actionMode === 'pre_book'} onOpenChange={(o) => { if (!o) { setActionMode(null); setReservationResult(null); } }}>
@@ -440,11 +523,11 @@ export default function PropertyDetail() {
         <DialogContent className="sm:max-w-md">
           <DialogHeader><DialogTitle>Schedule a Visit</DialogTitle></DialogHeader>
           <div className="space-y-4">
-            <div><Label>Your Name</Label><Input placeholder="Full name" /></div>
-            <div><Label>Phone</Label><Input placeholder="+91..." /></div>
-            <div><Label>Preferred Date</Label><Input type="date" /></div>
+            <div><Label>Your Name</Label><Input placeholder="Full name" value={visitForm.name} onChange={(e) => setVisitForm(v => ({ ...v, name: e.target.value }))} /></div>
+            <div><Label>Phone</Label><Input placeholder="+91..." value={visitForm.phone} onChange={(e) => setVisitForm(v => ({ ...v, phone: e.target.value }))} /></div>
+            <div><Label>Preferred Date</Label><Input type="date" value={visitForm.date} onChange={(e) => setVisitForm(v => ({ ...v, date: e.target.value }))} /></div>
             <div><Label>Preferred Time</Label>
-              <Select>
+              <Select value={visitForm.time} onValueChange={(val) => setVisitForm(v => ({ ...v, time: val }))}>
                 <SelectTrigger><SelectValue placeholder="Select time slot" /></SelectTrigger>
                 <SelectContent>
                   {['10:00 AM', '12:00 PM', '2:00 PM', '4:00 PM', '6:00 PM'].map(t => (
@@ -453,8 +536,8 @@ export default function PropertyDetail() {
                 </SelectContent>
               </Select>
             </div>
-            <Button className="w-full bg-accent hover:bg-accent/90 text-accent-foreground" onClick={() => { toast.success("Visit request submitted! We'll confirm shortly."); setActionMode(null); }}>
-              Request Visit
+            <Button className="w-full bg-accent hover:bg-accent/90 text-accent-foreground" onClick={handleScheduleVisit} disabled={visitSubmitting}>
+              {visitSubmitting ? 'Submitting...' : 'Request Visit'}
             </Button>
           </div>
         </DialogContent>

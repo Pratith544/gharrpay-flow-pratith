@@ -1,4 +1,5 @@
-import { useState } from 'react';
+import { useEffect, useState, type KeyboardEvent } from 'react';
+import { useQueryClient } from '@tanstack/react-query';
 import { useConversationMessages, useSendMessage, useMessageTemplates } from '@/hooks/useConversationThreads';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
@@ -20,9 +21,35 @@ const ConversationChat = ({ leadId, leadName, leadBudget, leadLocation, leadStat
   const { data: messages, isLoading } = useConversationMessages(leadId);
   const sendMessage = useSendMessage();
   const { data: templates } = useMessageTemplates();
+  const qc = useQueryClient();
   const [text, setText] = useState('');
   const [aiSuggestions, setAiSuggestions] = useState<any[]>([]);
   const [aiLoading, setAiLoading] = useState(false);
+
+  // Real-time subscription for new messages
+  useEffect(() => {
+    if (!leadId) return;
+    const channel = supabase
+      .channel(`conversations-${leadId}`)
+      .on(
+        'postgres_changes',
+        { event: 'INSERT', schema: 'public', table: 'conversations', filter: `lead_id=eq.${leadId}` },
+        (payload) => {
+          const row: any = payload.new;
+          qc.setQueryData<any[]>(['conversation-messages', leadId], (prev) => {
+            const curr = prev || [];
+            if (curr.some((m) => m.id === row.id)) return curr;
+            return [...curr, row];
+          });
+          qc.invalidateQueries({ queryKey: ['conversation-threads'] });
+        }
+      )
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, [leadId, qc]);
 
   const handleSend = async () => {
     if (!text.trim() || !leadId) return;
@@ -30,7 +57,7 @@ const ConversationChat = ({ leadId, leadName, leadBudget, leadLocation, leadStat
     setText('');
   };
 
-  const handleKeyDown = (e: React.KeyboardEvent) => {
+  const handleKeyDown = (e: KeyboardEvent<HTMLTextAreaElement>) => {
     if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleSend(); }
   };
 

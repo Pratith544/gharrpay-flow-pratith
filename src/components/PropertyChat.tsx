@@ -1,8 +1,9 @@
-import { useState, useRef, useEffect } from 'react';
+import { useState, useRef, useEffect, useMemo } from 'react';
 import { X, Send, Bot, User, Loader2 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { motion, AnimatePresence } from 'framer-motion';
+import { supabase } from '@/integrations/supabase/client';
 
 interface ChatMessage {
   id: string;
@@ -36,20 +37,19 @@ const getAutoResponse = (message: string): string | null => {
 };
 
 interface PropertyChatProps {
+  propertyId: string;
   propertyName: string;
   isOpen: boolean;
   onClose: () => void;
 }
 
-export default function PropertyChat({ propertyName, isOpen, onClose }: PropertyChatProps) {
-  const [messages, setMessages] = useState<ChatMessage[]>([
-    {
-      id: '1',
-      role: 'bot',
-      text: `Hi! 👋 I'm here to help you with ${propertyName}. Ask me about rent, food, amenities, move-in process, or anything else!`,
-      time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-    },
-  ]);
+const formatTime = (d: string | Date) =>
+  new Date(d).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+
+export default function PropertyChat({ propertyId, propertyName, isOpen, onClose }: PropertyChatProps) {
+  const storageKey = useMemo(() => `gharpayy:property_chat_lead:${propertyId}`, [propertyId]);
+  const [leadId, setLeadId] = useState<string | null>(null);
+  const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState('');
   const [isTyping, setIsTyping] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -60,30 +60,167 @@ export default function PropertyChat({ propertyName, isOpen, onClose }: Property
 
   const quickQuestions = ['What about food?', 'Is WiFi included?', 'Security details?', 'Move-in process?'];
 
-  const sendMessage = (text: string) => {
-    if (!text.trim()) return;
+  // Bootstrap: get/create a lead for this property chat
+  useEffect(() => {
+    if (!isOpen) return;
+    const existing = localStorage.getItem(storageKey);
+    if (existing) setLeadId(existing);
+  }, [isOpen, storageKey]);
 
-    const userMsg: ChatMessage = {
-      id: Date.now().toString(),
-      role: 'user',
-      text: text.trim(),
-      time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+  useEffect(() => {
+    if (!isOpen) return;
+    if (leadId) return;
+
+    (async () => {
+      const now = new Date().toISOString();
+      const pseudoPhone = `WEBCHAT_${Date.now()}_${Math.floor(Math.random() * 1e6)}`;
+      const { data: lead, error } = await supabase
+        .from('leads')
+        .insert({
+          name: `Website Chat — ${propertyName}`,
+          phone: pseudoPhone,
+          property_id: propertyId,
+          source: 'website',
+          status: 'new',
+          last_activity_at: now,
+        })
+        .select()
+        .single();
+      if (error) throw error;
+
+      localStorage.setItem(storageKey, lead.id);
+      setLeadId(lead.id);
+
+      await supabase.from('conversations').insert({
+        lead_id: lead.id,
+        message: `Hi! 👋 I'm here to help you with ${propertyName}. Ask me about rent, food, amenities, move-in process, or anything else!`,
+        direction: 'outbound',
+        channel: 'website_chat',
+        context_type: 'bot',
+        context_id: propertyId,
+        created_at: now,
+      });
+    })().catch(() => {
+      // Fail silently in UI; widget still works but without persistence
+      setMessages([
+        {
+          id: 'local-1',
+          role: 'bot',
+          text: `Hi! 👋 I'm here to help you with ${propertyName}. Ask me about rent, food, amenities, move-in process, or anything else!`,
+          time: formatTime(new Date()),
+        },
+      ]);
+    });
+  }, [isOpen, leadId, propertyId, propertyName, storageKey]);
+
+  // Load messages from Supabase
+  useEffect(() => {
+    if (!isOpen || !leadId) return;
+    let cancelled = false;
+
+    (async () => {
+      const { data, error } = await supabase
+        .from('conversations')
+        .select('*')
+        .eq('lead_id', leadId)
+        .order('created_at', { ascending: true });
+      if (error) throw error;
+      if (cancelled) return;
+      const mapped: ChatMessage[] = (data || []).map((m: any) => ({
+        id: m.id,
+        role:
+          m.direction === 'inbound'
+            ? 'user'
+            : m.context_type === 'agent'
+              ? 'agent'
+              : 'bot',
+        text: m.message,
+        time: formatTime(m.created_at),
+      }));
+      setMessages(mapped);
+    })().catch(() => {
+      // Keep whatever is already shown
+    });
+
+    return () => {
+      cancelled = true;
     };
-    setMessages(prev => [...prev, userMsg]);
+  }, [isOpen, leadId]);
+
+  // Real-time subscription for new messages
+  useEffect(() => {
+    if (!isOpen || !leadId) return;
+    const channel = supabase
+      .channel(`property-chat-${leadId}`)
+      .on(
+        'postgres_changes',
+        { event: 'INSERT', schema: 'public', table: 'conversations', filter: `lead_id=eq.${leadId}` },
+        (payload) => {
+          const m: any = payload.new;
+          setMessages((prev) => [
+            ...prev,
+            {
+              id: m.id,
+              role:
+                m.direction === 'inbound'
+                  ? 'user'
+                  : m.context_type === 'agent'
+                    ? 'agent'
+                    : 'bot',
+              text: m.message,
+              time: formatTime(m.created_at),
+            },
+          ]);
+        }
+      )
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, [isOpen, leadId]);
+
+  const sendMessage = async (text: string) => {
+    if (!text.trim()) return;
+    if (!leadId) return;
+
+    const now = new Date().toISOString();
     setInput('');
     setIsTyping(true);
 
-    setTimeout(() => {
+    await supabase.from('conversations').insert({
+      lead_id: leadId,
+      message: text.trim(),
+      direction: 'inbound',
+      channel: 'website_chat',
+      context_type: 'user',
+      context_id: propertyId,
+      created_at: now,
+    });
+
+    await supabase
+      .from('leads')
+      .update({ last_activity_at: now })
+      .eq('id', leadId);
+
+    const delay = 800 + Math.random() * 600;
+    window.setTimeout(async () => {
       const auto = getAutoResponse(text);
-      const botMsg: ChatMessage = {
-        id: (Date.now() + 1).toString(),
-        role: auto ? 'bot' : 'agent',
-        text: auto || "Thanks for your question! I'm connecting you with a Gharpayy housing advisor who can help. They usually respond within 2 minutes. You'll also get a WhatsApp message shortly.",
-        time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-      };
-      setMessages(prev => [...prev, botMsg]);
+      const reply =
+        auto ||
+        "Thanks for your question! I'm connecting you with a Gharpayy housing advisor who can help. They usually respond within 2 minutes. You'll also get a WhatsApp message shortly.";
+
+      await supabase.from('conversations').insert({
+        lead_id: leadId,
+        message: reply,
+        direction: 'outbound',
+        channel: 'website_chat',
+        context_type: auto ? 'bot' : 'agent',
+        context_id: propertyId,
+        created_at: new Date().toISOString(),
+      });
       setIsTyping(false);
-    }, 800 + Math.random() * 600);
+    }, delay);
   };
 
   return (

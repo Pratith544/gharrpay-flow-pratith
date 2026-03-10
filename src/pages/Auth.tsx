@@ -29,12 +29,15 @@ const Auth = () => {
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
     setLoading(true);
-    // Ensure demo account exists first
     if (email === 'demo@gharpayy.com') await ensureDemoAccount();
     const { error } = await supabase.auth.signInWithPassword({ email, password });
-    if (error) toast.error(error.message);
-    else toast.success('Welcome back!');
-    setLoading(false);
+    if (error) {
+      toast.error(error.message);
+      setLoading(false);
+    } else {
+      toast.success('Welcome back!');
+      window.location.href = '/dashboard';
+    }
   };
 
   const handleSignup = async (e: React.FormEvent) => {

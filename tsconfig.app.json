@@ -1,7 +1,12 @@
 {
   "compilerOptions": {
-    "allowImportingTsExtensions": true,
-    "isolatedModules": true,
+    "baseUrl": ".",
+    "paths": {
+      "@/*": [
+        "./src/*"
+      ]
+    },
+
     "jsx": "react-jsx",
     "lib": [
       "ES2020",
@@ -11,23 +16,27 @@
     "module": "ESNext",
     "moduleDetection": "force",
     "moduleResolution": "bundler",
+    "target": "ES2020",
+    "useDefineForClassFields": true,
+
+    "allowImportingTsExtensions": true,
+    "allowSyntheticDefaultImports": true,
+    "esModuleInterop": true,
+    "isolatedModules": true,
+    "resolveJsonModule": true,
+
     "noEmit": true,
     "noFallthroughCasesInSwitch": false,
     "noImplicitAny": false,
     "noUnusedLocals": false,
     "noUnusedParameters": false,
-    "paths": {
-      "@/*": [
-        "./src/*"
-      ]
-    },
     "skipLibCheck": true,
     "strict": false,
-    "target": "ES2020",
+
     "types": [
+      "vite/client",
       "vitest/globals"
-    ],
-    "useDefineForClassFields": true
+    ]
   },
   "include": [
     "src"
