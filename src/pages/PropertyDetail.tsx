@@ -36,6 +36,8 @@ export default function PropertyDetail() {
   const [customerForm, setCustomerForm] = useState({ name: '', phone: '', email: '', moveInDate: '' });
   const [visitForm, setVisitForm] = useState({ name: '', phone: '', date: '', time: '' });
   const [visitSubmitting, setVisitSubmitting] = useState(false);
+  const [tourForm, setTourForm] = useState({ name: '', phone: '', slot: '' });
+  const [tourSubmitting, setTourSubmitting] = useState(false);
   const [reservationResult, setReservationResult] = useState<any>(null);
   const [heroIdx, setHeroIdx] = useState(0);
 
@@ -69,7 +71,9 @@ export default function PropertyDetail() {
     if (!rents.length) return p.price_range || '—';
     return `₹${Math.min(...rents).toLocaleString()}`;
   };
-  const getSimBeds = (p: any) => (p.rooms || []).flatMap((r: any) => (r.beds || []).filter((b: any) => b.status === 'vacant')).length;
+
+  const getSimBeds = (p: any) =>
+    (p.rooms || []).flatMap((r: any) => (r.beds || []).filter((b: any) => b.status === 'vacant')).length;
 
   const handlePreBook = async () => {
     if (!selectedBed || !selectedRoom || !customerForm.name || !customerForm.phone) {
@@ -136,18 +140,16 @@ export default function PropertyDetail() {
       toast.error('Please select a valid date and time.');
       return;
     }
-
     setVisitSubmitting(true);
     try {
       const now = new Date().toISOString();
-
       const { data: lead, error: leadError } = await supabase
         .from('leads')
         .insert({
           name: visitForm.name.trim(),
           phone: visitForm.phone.trim(),
           property_id: property.id,
-          source: 'website',
+          source: 'Website',
           status: 'visit_scheduled',
           last_activity_at: now,
         })
@@ -166,19 +168,17 @@ export default function PropertyDetail() {
       });
       if (visitError) throw visitError;
 
-      await supabase
-        .from('activity_log')
-        .insert({
-          lead_id: lead.id,
-          action: 'visit_scheduled',
-          created_at: now,
-          metadata: {
-            description: `Visit scheduled at ${property.name} on ${scheduledAt}`,
-            property_id: property.id,
-            property_name: property.name,
-            scheduled_at: scheduledAt,
-          },
-        });
+      await supabase.from('activity_log').insert({
+        lead_id: lead.id,
+        action: 'visit_scheduled',
+        created_at: now,
+        metadata: {
+          description: `Visit scheduled at ${property.name} on ${scheduledAt}`,
+          property_id: property.id,
+          property_name: property.name,
+          scheduled_at: scheduledAt,
+        },
+      });
 
       toast.success("Visit request submitted! We'll confirm shortly.");
       setVisitForm({ name: '', phone: '', date: '', time: '' });
@@ -187,6 +187,51 @@ export default function PropertyDetail() {
       toast.error(e?.message || 'Failed to schedule visit');
     } finally {
       setVisitSubmitting(false);
+    }
+  };
+
+  const handleVirtualTour = async () => {
+    if (!tourForm.name.trim() || !tourForm.phone.trim() || !tourForm.slot) {
+      toast.error('Please fill in all fields.');
+      return;
+    }
+    setTourSubmitting(true);
+    try {
+      const now = new Date().toISOString();
+      const { data: lead, error: leadError } = await supabase
+        .from('leads')
+        .insert({
+          name: tourForm.name.trim(),
+          phone: tourForm.phone.trim(),
+          property_id: property.id,
+          source: 'Website',
+          status: 'new',
+          notes: `Virtual tour request — Slot: ${tourForm.slot}`,
+          last_activity_at: now,
+        })
+        .select()
+        .single();
+      if (leadError) throw leadError;
+
+      await supabase.from('activity_log').insert({
+        lead_id: lead.id,
+        action: 'virtual_tour_requested',
+        created_at: now,
+        metadata: {
+          description: `Virtual tour requested at ${property.name}`,
+          slot: tourForm.slot,
+          property_id: property.id,
+          property_name: property.name,
+        },
+      });
+
+      toast.success('Virtual tour booked! Check WhatsApp for the link.');
+      setTourForm({ name: '', phone: '', slot: '' });
+      setActionMode(null);
+    } catch (e: any) {
+      toast.error(e?.message || 'Failed to book virtual tour');
+    } finally {
+      setTourSubmitting(false);
     }
   };
 
@@ -548,22 +593,43 @@ export default function PropertyDetail() {
         <DialogContent className="sm:max-w-md">
           <DialogHeader><DialogTitle>Book a Virtual Tour</DialogTitle></DialogHeader>
           <div className="space-y-4">
-            <p className="text-sm text-muted-foreground">See the property from the comfort of your home. A Gharpayy agent will give you a live video walkthrough.</p>
-            <div><Label>Your Name</Label><Input placeholder="Full name" /></div>
-            <div><Label>Phone / WhatsApp</Label><Input placeholder="+91..." /></div>
-            <div><Label>Preferred Slot</Label>
-              <Select>
+            <p className="text-sm text-muted-foreground">
+              See the property from the comfort of your home. A Gharpayy agent will give you a live video walkthrough.
+            </p>
+            <div>
+              <Label>Your Name</Label>
+              <Input
+                placeholder="Full name"
+                value={tourForm.name}
+                onChange={e => setTourForm(f => ({ ...f, name: e.target.value }))}
+              />
+            </div>
+            <div>
+              <Label>Phone / WhatsApp</Label>
+              <Input
+                placeholder="+91..."
+                value={tourForm.phone}
+                onChange={e => setTourForm(f => ({ ...f, phone: e.target.value }))}
+              />
+            </div>
+            <div>
+              <Label>Preferred Slot</Label>
+              <Select value={tourForm.slot} onValueChange={val => setTourForm(f => ({ ...f, slot: val }))}>
                 <SelectTrigger><SelectValue placeholder="Select time" /></SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="today_now">Today - As soon as possible</SelectItem>
-                  <SelectItem value="today_eve">Today - Evening (5-7 PM)</SelectItem>
-                  <SelectItem value="tomorrow_morn">Tomorrow - Morning (10-12 PM)</SelectItem>
-                  <SelectItem value="tomorrow_eve">Tomorrow - Evening (5-7 PM)</SelectItem>
+                  <SelectItem value="Today - As soon as possible">Today - As soon as possible</SelectItem>
+                  <SelectItem value="Today - Evening (5-7 PM)">Today - Evening (5-7 PM)</SelectItem>
+                  <SelectItem value="Tomorrow - Morning (10-12 PM)">Tomorrow - Morning (10-12 PM)</SelectItem>
+                  <SelectItem value="Tomorrow - Evening (5-7 PM)">Tomorrow - Evening (5-7 PM)</SelectItem>
                 </SelectContent>
               </Select>
             </div>
-            <Button className="w-full bg-accent hover:bg-accent/90 text-accent-foreground" onClick={() => { toast.success('Virtual tour booked! Check WhatsApp for the link.'); setActionMode(null); }}>
-              Book Virtual Tour
+            <Button
+              className="w-full bg-accent hover:bg-accent/90 text-accent-foreground"
+              onClick={handleVirtualTour}
+              disabled={tourSubmitting}
+            >
+              {tourSubmitting ? 'Booking...' : 'Book Virtual Tour'}
             </Button>
           </div>
         </DialogContent>
