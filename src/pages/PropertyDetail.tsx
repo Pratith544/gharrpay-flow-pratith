@@ -15,6 +15,7 @@ import { motion } from 'framer-motion';
 import PropertyChat from '@/components/PropertyChat';
 import NearbyLandmarks from '@/components/NearbyLandmarks';
 import { supabase } from '@/integrations/supabase/client';
+import { openRazorpayCheckout } from '@/lib/razorpay';
 
 const AMENITY_ICONS: Record<string, any> = {
   WiFi: Wifi, Food: Coffee, Laundry: Shirt, Security: ShieldCheck, Cleaning: Sparkles,
@@ -40,6 +41,7 @@ export default function PropertyDetail() {
   const [tourSubmitting, setTourSubmitting] = useState(false);
   const [reservationResult, setReservationResult] = useState<any>(null);
   const [heroIdx, setHeroIdx] = useState(0);
+  const [paymentLoading, setPaymentLoading] = useState(false);
 
   const { data: similarProperties } = useSimilarProperties(property?.area, property?.city, propertyId);
 
@@ -100,17 +102,77 @@ export default function PropertyDetail() {
   };
 
   const handleConfirmPayment = async () => {
-    if (!reservationResult?.reservation_id) return;
+    const reservation_id = reservationResult?.reservation_id;
+    if (!reservation_id) return;
+
+    setPaymentLoading(true);
     try {
-      await confirmReservation.mutateAsync({
-        reservation_id: reservationResult.reservation_id,
-        payment_reference: 'SIM_' + Date.now(),
+      const functionsUrl = import.meta.env.VITE_SUPABASE_FUNCTIONS_URL as string | undefined;
+      if (!functionsUrl) throw new Error('Payment service not configured');
+
+      const amount = 100000; // paise (₹1,000)
+      const currency = 'INR';
+
+      const { data: sessionData } = await supabase.auth.getSession();
+      const accessToken = sessionData.session?.access_token;
+
+      const headers: Record<string, string> = {
+        'Content-Type': 'application/json',
+        apikey: import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY as string,
+        Authorization: `Bearer ${accessToken || (import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY as string)}`,
+      };
+
+      const res = await fetch(`${functionsUrl}/create-razorpay-order`, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({
+          amount,
+          currency,
+          receipt: reservation_id,
+          reservation_id,
+        }),
       });
-      toast.success('Booking confirmed! Our team will contact you shortly.');
-      setActionMode(null);
-      setReservationResult(null);
+
+      const json = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(json?.error || 'Failed to create payment order');
+
+      const orderId = json?.order_id as string | undefined;
+      const keyId = (json?.key_id as string | undefined) || (import.meta.env.VITE_RAZORPAY_KEY_ID as string);
+
+      if (!orderId || !keyId) throw new Error('Invalid payment order response');
+
+      openRazorpayCheckout({
+        orderId,
+        amount,
+        currency,
+        keyId,
+        customerName: customerForm.name || undefined,
+        customerPhone: customerForm.phone || undefined,
+        customerEmail: customerForm.email || undefined,
+        onSuccess: async ({ razorpay_payment_id }) => {
+          try {
+            await confirmReservation.mutateAsync({
+              reservation_id,
+              payment_reference: razorpay_payment_id,
+            });
+            toast.success('Booking confirmed!');
+            setActionMode(null);
+            setReservationResult(null);
+          } catch (e: any) {
+            toast.error(e.message);
+          } finally {
+            setPaymentLoading(false);
+          }
+        },
+        onFailure: (reason) => {
+          if (reason instanceof Error) toast.error(reason.message);
+          else toast.error('Payment failed');
+          setPaymentLoading(false);
+        },
+      });
     } catch (e: any) {
-      toast.error(e.message);
+      toast.error(e?.message || 'Payment failed');
+      setPaymentLoading(false);
     }
   };
 
@@ -554,8 +616,12 @@ export default function PropertyDetail() {
                 <p className="text-[11px] text-muted-foreground">Reservation Fee (adjusted against first month rent)</p>
               </div>
               <DialogFooter>
-                <Button onClick={handleConfirmPayment} disabled={confirmReservation.isPending} className="w-full bg-accent hover:bg-accent/90 text-accent-foreground">
-                  {confirmReservation.isPending ? 'Processing...' : 'Simulate Payment ₹1,000'}
+                <Button
+                  onClick={handleConfirmPayment}
+                  disabled={confirmReservation.isPending || paymentLoading}
+                  className="w-full bg-accent hover:bg-accent/90 text-accent-foreground"
+                >
+                  Pay ₹1,000 via Razorpay
                 </Button>
               </DialogFooter>
             </div>
